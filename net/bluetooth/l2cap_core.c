@@ -700,6 +700,9 @@ void l2cap_send_cmd(struct l2cap_conn *conn, u8 ident, u8 code, u16 len, void *d
 	if (!skb)
 		return;
 
+	if (conn->hcon == NULL || conn->hcon->hdev == NULL)
+		return;
+
 	if (lmp_no_flush_capable(conn->hcon->hdev))
 		flags = ACL_START_NO_FLUSH;
 	else
@@ -1408,6 +1411,11 @@ void l2cap_do_send(struct sock *sk, struct sk_buff *skb)
 			kfree_skb(skb);
 	} else {
 		u16 flags;
+
+		if (!(pi->conn)) {
+			kfree_skb(skb);
+			return;
+		}
 
 		bt_cb(skb)->force_active = pi->force_active;
 		BT_DBG("Sending on BR/EDR connection %p", pi->conn->hcon);
@@ -2796,8 +2804,8 @@ static struct sk_buff *l2cap_build_cmd(struct l2cap_conn *conn,
 	BT_DBG("conn %p, code 0x%2.2x, ident 0x%2.2x, len %d",
 			conn, code, ident, dlen);
 
-	//if (conn->mtu < L2CAP_HDR_SIZE + L2CAP_CMD_HDR_SIZE)
-	//	return NULL;
+	if (conn->mtu < L2CAP_HDR_SIZE + L2CAP_CMD_HDR_SIZE)
+		return NULL;
 
 	len = L2CAP_HDR_SIZE + L2CAP_CMD_HDR_SIZE + dlen;
 	count = min_t(unsigned int, mtu, len);
@@ -3361,6 +3369,7 @@ done:
 		break;
 
 	case L2CAP_MODE_STREAMING:
+		l2cap_setup_txwin(pi);
 		rfc.txwin_size      = 0;
 		rfc.max_transmit    = 0;
 		rfc.retrans_timeout = 0;
@@ -5382,7 +5391,7 @@ void l2cap_amp_physical_complete(int result, u8 local_id, u8 remote_id,
 	release_sock(sk);
 }
 
-int l2cap_logical_link_complete(struct hci_chan *chan, u8 status)
+static void l2cap_logical_link_complete(struct hci_chan *chan, u8 status)
 {
 	struct l2cap_pinfo *pi;
 	struct sock *sk;
@@ -5400,7 +5409,7 @@ int l2cap_logical_link_complete(struct hci_chan *chan, u8 status)
 
 	if (sk->sk_state != BT_CONNECTED && !l2cap_pi(sk)->amp_id) {
 		release_sock(sk);
-		return 0;
+		return;
 	}
 
 	pi = l2cap_pi(sk);
@@ -5527,7 +5536,6 @@ int l2cap_logical_link_complete(struct hci_chan *chan, u8 status)
 	}
 
 	release_sock(sk);
-	return 0;
 }
 
 static void l2cap_logical_link_worker(struct work_struct *work)
@@ -5536,8 +5544,11 @@ static void l2cap_logical_link_worker(struct work_struct *work)
 		container_of(work, struct l2cap_logical_link_work, work);
 	struct sock *sk = log_link_work->chan->l2cap_sk;
 
-	l2cap_logical_link_complete(log_link_work->chan, log_link_work->status);
-	sock_put(sk);
+	if (sk) {
+		l2cap_logical_link_complete(log_link_work->chan,
+							log_link_work->status);
+		sock_put(sk);
+	}
 	hci_chan_put(log_link_work->chan);
 	kfree(log_link_work);
 }
